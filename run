@@ -25,7 +25,7 @@ exit 1 if $id && $id !~ /^\d+$/;
 
 my %conf;
 map{
-    chmod $_;
+    chomp $_;
     $conf{$1} = $2 if $_ =~ /^\s*([^:]+)\s*:\s*(.+)\s*$/;
 }`cat $RealBin/my.config`;
 map{ die "$_ undef" unless $conf{$_} }qw( ssh scp );
