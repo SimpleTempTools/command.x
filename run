@@ -1,0 +1,99 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use FindBin qw( $RealBin );
+
+
+my ( %pass, @node );
+map{ 
+    chomp  $_;
+    if( $_ =~ /^\s*([^:]+)\s*:\s*(.+)\s*$/ )
+    {
+        $pass{$1} = $2;
+        push @node, $1;
+    }
+    else { push @node, $_; }
+}`cat $RealBin/node.list 2>/dev/null`;
+
+my ( $i, $count ) = ( 0, scalar @node );
+
+my $opt = int( 1 + $count / 32 );
+
+my ( $cap, $id ) = @ARGV;
+exec "$0 $opt" unless $cap && $cap =~ /^\d+$/;
+exit 1 if $id && $id !~ /^\d+$/;
+
+my %conf;
+map{
+    chmod $_;
+    $conf{$1} = $2 if $_ =~ /^\s*([^:]+)\s*:\s*(.+)\s*$/;
+}`cat $RealBin/my.config`;
+map{ die "$_ undef" unless $conf{$_} }qw( ssh scp );
+
+unless( $id )
+{
+    system( "mkdir '$RealBin/RE'" ) unless -d "$RealBin/RE";
+    system( "rm -f $RealBin/RE/Fail*" );
+    my $len = int( $count / $cap );
+    $len ++ if $count % $cap;
+    map{ exec "$0 $cap $_" unless fork }1 .. $len;
+    exit;
+}
+
+@node = splice @node, $cap * ( $id - 1 ), $cap;
+
+my %skip;
+map{ 
+    chomp  $_; $skip{$_} = 1;
+}`cat $RealBin/RE/Success* $RealBin/RE/Ignore* 2>/dev/null`;
+
+my %fail = (
+    'Network unreachable' => 'NetworkUnreachable',
+    'Connection timed out' => 'ConnectionTimedOut',
+    'Permission denied' => 'PermissionDenied',
+    'Connection refused' => 'ConnectionRefused',
+);
+
+my $md5 = `md5sum $RealBin/command.x|awk '{print \$1}'`;
+chomp $md5;
+die "get md5 fail" unless $md5 && $md5 =~ /^[a-z0-9]+$/;
+my $dp = "/tmp/command.x.$md5";
+
+$count = scalar @node;
+my %type = ( Success => 1, Fail => 1, Ignore => 1, Fatal => 1 );
+
+for my $node ( @node )
+{
+    $i ++;
+
+    print '#' x 75, " $id => $i/$count\nnode: $node\n";
+    if( $skip{$node} ) { print "skip.\n"; next; }
+
+    exit 1 if glob "$RealBin/Fatal*";
+
+    my $pass = $pass{$node} ? "sshpass -p '$pass{$node}' " : '';
+    my $scp = `$pass $conf{scp} $RealBin/command.x $node:$dp 2>&1`;
+    print $scp;
+    map{
+        if( $scp =~ /$_/ )
+        {
+            system "echo $node >> $RealBin/RE/Fail.scp.$fail{$_}";
+            next;
+        }
+    }keys %fail;
+
+    exit 1 if glob "$RealBin/Fatal*";
+
+    my $cmd = `$pass $conf{ssh} $node "chmod +x $dp;$dp" 2>&1`;
+    print $cmd;
+    map{
+        if( $cmd =~ /$_/ )
+        {
+            system "echo $node >> $RealBin/RE/Fail.cmd.$fail{$_}";
+            next;
+        }
+    }keys %fail;
+
+    $cmd =~ /RE:([a-zA-Z]+)([\. a-zA-Z0-9\-=#,]*):RE/;
+    system sprintf "echo $node >> '$RealBin/RE/%s'", ( $1 && $type{$1} ) ? "$1$2" : 'Fail.RE.unkown';
+}
